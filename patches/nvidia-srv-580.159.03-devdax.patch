@@ -1,0 +1,118 @@
+--- a/nv-dma.c
++++ b/nv-dma.c
+@@ -376,7 +376,7 @@
+         return NV_ERR_NOT_SUPPORTED;
+     }
+ 
+-    if (page_count > get_num_physpages())
++    if (0) /* patched: allow DEVDAX beyond physpages */
+     {
+         NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
+                 "DMA mapping request too large!\n");
+@@ -457,7 +457,7 @@
+         return NV_ERR_NOT_SUPPORTED;
+     }
+ 
+-    if (page_count > get_num_physpages())
++    if (0) /* patched: allow DEVDAX beyond physpages */
+     {
+         NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
+                 "DMA mapping request too large!\n");
+@@ -527,7 +527,7 @@
+ 
+     dma_map = *priv;
+ 
+-    if (page_count > get_num_physpages())
++    if (0) /* patched: allow DEVDAX beyond physpages */
+     {
+         NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
+                 "DMA unmapping request too large!\n");
+--- a/os-mlock.c
++++ b/os-mlock.c
+@@ -120,12 +120,18 @@
+         return NV_ERR_NOT_SUPPORTED;
+     }
+ 
+-    rmStatus = os_alloc_mem((void **)&result_array, (page_count * sizeof(NvP64)));
+-    if (rmStatus != NV_OK)
+     {
+-        nv_printf(NV_DBG_ERRORS,
+-                "NVRM: failed to allocate page table!\n");
+-        return rmStatus;
++        /* patched: large IO-mem pte arrays via vmalloc */
++        NvU64 alloc_size = page_count * sizeof(NvP64);
++        result_array = (void **)__vmalloc(alloc_size,
++                GFP_KERNEL | __GFP_NOWARN | __GFP_RETRY_MAYFAIL);
++        if (result_array == NULL)
++        {
++            printk(KERN_ERR "NVRM: vmalloc %llu bytes for io pte array FAILED\n",
++                   (unsigned long long)alloc_size);
++            return NV_ERR_NO_MEMORY;
++        }
++        rmStatus = NV_OK;
+     }
+ 
+     nv_mmap_read_lock(mm);
+@@ -160,7 +166,7 @@
+ 
+     if (rmStatus != NV_OK)
+     {
+-        os_free_mem(result_array);
++        vfree(result_array);
+     }
+ 
+     return rmStatus;
+@@ -193,13 +199,18 @@
+         return NV_ERR_NOT_SUPPORTED;
+     }
+ 
+-    rmStatus = os_alloc_mem((void **)&user_pages,
+-            (page_count * sizeof(*user_pages)));
+-    if (rmStatus != NV_OK)
+     {
+-        nv_printf(NV_DBG_ERRORS,
+-                "NVRM: failed to allocate page table!\n");
+-        return rmStatus;
++        /* patched: large DEVDAX page arrays via vmalloc, allow retry/fail */
++        NvU64 alloc_size = page_count * sizeof(*user_pages);
++        user_pages = (struct page **)__vmalloc(alloc_size,
++                GFP_KERNEL | __GFP_NOWARN | __GFP_RETRY_MAYFAIL);
++        if (user_pages == NULL)
++        {
++            printk(KERN_ERR "NVRM: vmalloc %llu bytes for page array FAILED\n",
++                   (unsigned long long)alloc_size);
++            return NV_ERR_NO_MEMORY;
++        }
++        rmStatus = NV_OK;
+     }
+ 
+     nv_mmap_read_lock(mm);
+@@ -252,7 +263,7 @@
+     {
+         for (i = 0; i < pinned; i++)
+             NV_UNPIN_USER_PAGE(user_pages[i]);
+-        os_free_mem(user_pages);
++        vfree(user_pages);
+         return NV_ERR_INVALID_ADDRESS;
+     }
+ 
+@@ -278,7 +289,7 @@
+         NV_UNPIN_USER_PAGE(user_pages[i]);
+     }
+ 
+-    os_free_mem(user_pages);
++    vfree(user_pages);
+ 
+     return NV_OK;
+ }
+--- a/nv.c
++++ b/nv.c
+@@ -369,7 +369,7 @@
+         return NULL;
+     }
+ 
+-    at->page_table = kvzalloc(pt_size, NV_GFP_KERNEL);
++    at->page_table = __vmalloc(pt_size, GFP_KERNEL | __GFP_ZERO | __GFP_NOWARN | __GFP_RETRY_MAYFAIL); /* patched */
+     if (at->page_table == NULL)
+     {
+         nv_printf(NV_DBG_ERRORS, "NVRM: failed to allocate page table\n");
